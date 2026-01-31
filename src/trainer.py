@@ -288,6 +288,8 @@ class TrainingPipeline:
         games = self_play.generate_games(
             num_games=self.games_per_iteration,
             verbose=verbose,
+            use_mcts=False,  # Fast mode: use network directly
+            max_moves=800,   # Limit game length
         )
 
         # Convert to training data

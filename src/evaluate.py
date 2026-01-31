@@ -139,7 +139,8 @@ class RandomAgent:
     """Baseline agent that plays random valid actions."""
 
     def select_action(self, game, valid_actions):
-        return np.random.choice(valid_actions)
+        import random
+        return random.choice(valid_actions)
 
 
 class GreedyAgent:

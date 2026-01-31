@@ -70,6 +70,8 @@ class SelfPlay:
         self,
         temperature_threshold: int = 30,
         verbose: bool = False,
+        use_mcts: bool = True,
+        max_moves: int = 800,
     ) -> GameRecord:
         """
         Play a single game of self-play.
@@ -78,6 +80,8 @@ class SelfPlay:
             temperature_threshold: Use temperature=1 for first N moves,
                                    then temperature=0 (greedy)
             verbose: Print game progress
+            use_mcts: If False, use network policy directly (much faster!)
+            max_moves: Maximum moves before forcing game end
 
         Returns:
             GameRecord with game history
@@ -85,12 +89,14 @@ class SelfPlay:
         # Initialize game
         game = self.game_wrapper_class(num_players=self.num_players)
 
-        # Initialize MCTS
-        mcts = self.mcts_class(
-            network=self.network,
-            action_encoder=self.action_encoder,
-            num_simulations=self.num_simulations,
-        )
+        # Initialize MCTS only if needed
+        mcts = None
+        if use_mcts:
+            mcts = self.mcts_class(
+                network=self.network,
+                action_encoder=self.action_encoder,
+                num_simulations=self.num_simulations,
+            )
 
         # Game history
         states = []
@@ -104,54 +110,82 @@ class SelfPlay:
         while not done:
             current_player = game.get_current_player()
             current_state = game.get_state()
+            valid_actions = game.get_valid_actions()
 
-            # Choose temperature based on move count
-            temp = 1.0 if move_count < temperature_threshold else 0.0
+            if not valid_actions:
+                break
 
-            # Run MCTS
-            action, action_probs = mcts.search(game, temperature=temp)
+            if use_mcts:
+                # Use MCTS (slower but better quality)
+                temp = 1.0 if move_count < temperature_threshold else 0.0
+                action, action_probs = mcts.search(game, temperature=temp)
+            else:
+                # Use network policy directly (FAST!)
+                state = game.get_state()
+                policy, _ = self.network.predict(state)
+
+                # Get probabilities for valid actions
+                action_probs = np.zeros(len(valid_actions))
+                for i, a in enumerate(valid_actions):
+                    idx = self.action_encoder.encode(a, game.game)
+                    action_probs[i] = max(policy[idx], 1e-6) if idx < len(policy) else 1e-6
+
+                # Apply temperature
+                temp = 1.0 if move_count < temperature_threshold else 0.5
+                if temp != 1.0:
+                    action_probs = action_probs ** (1/temp)
+
+                # Normalize
+                action_probs = action_probs / action_probs.sum()
+
+                action_idx = np.random.choice(len(valid_actions), p=action_probs)
+                action = valid_actions[action_idx]
 
             if action is None:
-                # No valid actions (shouldn't happen normally)
                 break
 
             # Record state and policy
             states.append(current_state.copy())
 
             # Convert action probs to full action space
-            valid_actions = game.get_valid_actions()
             full_policy = np.zeros(self.action_encoder.action_space_size)
             for i, a in enumerate(valid_actions):
-                idx = self.action_encoder.encode(a)
+                idx = self.action_encoder.encode(a, game.game)
                 if idx < len(full_policy) and i < len(action_probs):
                     full_policy[idx] = action_probs[i]
             policies.append(full_policy)
 
-            actions.append(self.action_encoder.encode(action))
+            actions.append(self.action_encoder.encode(action, game.game))
             players.append(current_player)
 
             # Execute action
             _, reward, done, info = game.step(action)
             move_count += 1
 
-            if verbose and move_count % 10 == 0:
-                print(f"Move {move_count}, Player {current_player}")
+            if verbose and move_count % 200 == 0:
+                vps = [game.game.state.player_state.get(f'P{i}_VICTORY_POINTS', 0) for i in range(4)]
+                print(f"Move {move_count}, VPs: {vps}")
 
-            # Safety check for very long games
-            if move_count > 1000:
-                if verbose:
-                    print("Game exceeded 1000 moves, ending...")
+            # Early termination for long games
+            if move_count >= max_moves:
                 break
 
-        # Determine winner
+        # Determine winner (by VP if game didn't end naturally)
         winner_color = game.game.winning_color()
         if winner_color:
             winner = game.colors.index(winner_color)
         else:
-            winner = -1  # Draw or no winner
+            # Determine by VP
+            vps = [game.game.state.player_state.get(f'P{i}_VICTORY_POINTS', 0) for i in range(self.num_players)]
+            max_vp = max(vps)
+            if max_vp >= 3:  # At least some progress
+                winner = vps.index(max_vp)
+            else:
+                winner = -1
 
         if verbose:
-            print(f"Game finished after {move_count} moves. Winner: {winner}")
+            vps = [game.game.state.player_state.get(f'P{i}_VICTORY_POINTS', 0) for i in range(self.num_players)]
+            print(f"Game finished: {move_count} moves, VPs: {vps}, Winner: {winner}")
 
         return GameRecord(
             states=states,
@@ -166,6 +200,8 @@ class SelfPlay:
         num_games: int,
         save_path: str = None,
         verbose: bool = True,
+        use_mcts: bool = False,
+        max_moves: int = 800,
     ) -> List[GameRecord]:
         """
         Generate multiple games of self-play.
@@ -174,6 +210,8 @@ class SelfPlay:
             num_games: Number of games to play
             save_path: Optional path to save game records
             verbose: Print progress
+            use_mcts: Use MCTS (slower) or network policy (faster)
+            max_moves: Maximum moves per game
 
         Returns:
             List of GameRecord objects
@@ -182,13 +220,13 @@ class SelfPlay:
 
         for i in range(num_games):
             if verbose:
-                print(f"\nPlaying game {i + 1}/{num_games}...")
+                print(f"Playing game {i + 1}/{num_games}...", end=" ")
 
-            record = self.play_game(verbose=verbose)
+            record = self.play_game(verbose=False, use_mcts=use_mcts, max_moves=max_moves)
             games.append(record)
 
             if verbose:
-                print(f"  Moves: {len(record.states)}, Winner: Player {record.winner}")
+                print(f"Moves: {len(record.states)}, Winner: P{record.winner}")
 
         if save_path:
             self.save_games(games, save_path)

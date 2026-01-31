@@ -113,81 +113,16 @@ class CatanNetwork(nn.Module):
         return policy.flatten(), value
 
 
-class ActionEncoder:
-    """
-    Encodes Catan actions to fixed-size vector indices.
-
-    Catan has a complex action space including:
-    - Building settlements/cities/roads at specific locations
-    - Buying/playing development cards
-    - Trading with bank/ports/players
-    - Moving the robber
-    - Discarding cards
-
-    This class maps all possible actions to unique indices.
-    """
-
-    def __init__(self):
-        # Action type base indices
-        self.action_types = {
-            "BUILD_SETTLEMENT": 0,      # 54 possible locations
-            "BUILD_ROAD": 54,           # 72 possible locations
-            "BUILD_CITY": 126,          # 54 possible locations
-            "BUY_DEVELOPMENT_CARD": 180,# 1 action
-            "PLAY_KNIGHT_CARD": 181,    # 19 robber destinations
-            "ROLL": 200,                # 1 action
-            "END_TURN": 201,            # 1 action
-            "MARITIME_TRADE": 202,      # Multiple trade options
-            "DISCARD": 250,             # Multiple discard options
-            # ... more action types
-        }
-
-        # Total action space size (conservative estimate)
-        self.action_space_size = 500
-
-    def encode(self, action) -> int:
-        """Convert a Catan action to an integer index."""
-        # Simplified encoding - full implementation needs
-        # to handle all action types and their parameters
-        action_type = action.action_type.name
-
-        if action_type in self.action_types:
-            base_idx = self.action_types[action_type]
-            # Add offset based on action-specific parameters
-            # This is a simplified version
-            return base_idx
-
-        return 0  # Default fallback
-
-    def decode(self, index: int, valid_actions: list):
-        """
-        Convert an index back to a Catan action.
-
-        Since actions are context-dependent, we need the list
-        of valid actions to find the matching one.
-        """
-        # Find the action that maps to this index
-        for action in valid_actions:
-            if self.encode(action) == index:
-                return action
-
-        # Fallback: return first valid action
-        return valid_actions[0] if valid_actions else None
-
-    def get_valid_action_mask(self, valid_actions: list) -> np.ndarray:
-        """Create a binary mask of valid actions."""
-        mask = np.zeros(self.action_space_size, dtype=np.float32)
-        for action in valid_actions:
-            idx = self.encode(action)
-            if 0 <= idx < self.action_space_size:
-                mask[idx] = 1
-        return mask
-
+# ActionEncoder is now in encoders.py - import from there
+from src.encoders import get_action_size, get_state_size
 
 if __name__ == "__main__":
-    # Test the network
-    state_size = 32  # From game_wrapper
-    action_size = 500
+    # Test the network with proper sizes
+    state_size = get_state_size()
+    action_size = get_action_size()
+
+    print(f"State size: {state_size}")
+    print(f"Action size: {action_size}")
 
     net = CatanNetwork(state_size, action_size)
 
